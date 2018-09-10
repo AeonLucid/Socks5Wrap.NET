@@ -7,139 +7,189 @@ using Socks5Wrap.Net.Socks5;
 
 namespace Socks5Wrap.Net
 {
+    /// <summary>
+    ///     This class is not reusable.
+    ///     You have to create a new instance for each connection / attempt.
+    /// </summary>
     public class SocketProxy
     {
-        public SocketProxy(string ip, int port)
+        private readonly byte[] _buffer;
+
+        public SocketProxy(string ip, int port, EndPoint destination)
         {
+            _buffer = new byte[512];
+
             Ip = ip;
             Port = port;
+            Destination = destination;
+            Socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
         }
 
+        /// <summary>
+        ///     The SOCKS5 server ip address.
+        /// </summary>
         public string Ip { get; }
 
+        /// <summary>
+        ///     The SOCKS5 server port.
+        /// </summary>
         public int Port { get; }
 
-        public async Task<Socket> ConnectToAsync(EndPoint endpoint)
-        {
-            var buffer = new byte[1024];
-            var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-            
-            // Connect to the SOCKS5 proxy.
-            await socket.ConnectAsync(Ip, Port);
+        /// <summary>
+        ///     The destination for the SOCKS5 proxy.
+        /// </summary>
+        public EndPoint Destination { get; internal set; }
 
+        /// <summary>
+        ///     The SOCKS5 connection <see cref="Socket"/>.
+        /// </summary>
+        public Socket Socket { get; internal set; }
+
+        public SocksMethodAuth? MethodAuth { get; internal set; }
+
+        public SocksReply? Reply { get; internal set; }
+
+        public async Task<(SocketProxyResult, Socket)> ConnectToAsync()
+        {
+            await Socket.ConnectAsync(Ip, Port);
+
+            var tasks = new Func<Task<SocketProxyResult>>[]
+            {
+                DoMethodsAsync,
+                DoAuthAsync,
+                DoConnectAsync
+            };
+
+            foreach (var task in tasks)
+            {
+                var response = await task();
+                if (response != SocketProxyResult.Ok)
+                {
+                    Socket.Dispose();
+                    return (response, null);
+                }
+            }
+
+            return (SocketProxyResult.Ok, Socket);
+        }
+
+        private async Task<SocketProxyResult> DoMethodsAsync()
+        {
             // The client connects to the server,
             // and sends a version identifier / method selection message.
-            var methodsBuffer = new byte[3]
+            var methodsBuffer = new byte[]
             {
                 (byte) SocksVersion.Five, // VER
                 0x01, // NMETHODS
-                0x00  // Methods
+                (byte) SocksMethodAuth.NoAuthRequired // Methods
             };
 
-            await socket.SendAsync(new ArraySegment<byte>(methodsBuffer), SocketFlags.None);
+            await Socket.SendAsync(new ArraySegment<byte>(methodsBuffer), SocketFlags.None);
 
             // The server selects from one of the methods given in METHODS,
             // and sends a METHOD selection message:
-            await socket.ReceiveAsync(new ArraySegment<byte>(buffer), SocketFlags.None);
-            
-            var selectedMethod = (SocksAuthMethod) buffer[1];
+            var receivedBytes = await Socket.ReceiveAsync(new ArraySegment<byte>(_buffer), SocketFlags.None);
+            if (receivedBytes != 2)
+            {
+                return SocketProxyResult.MethodInvalidLength;
+            }
+
+            MethodAuth = (SocksMethodAuth)_buffer[1];
+
+            return SocketProxyResult.Ok;
+        }
+
+        private async Task<SocketProxyResult> DoAuthAsync()
+        {
+            if (!MethodAuth.HasValue)
+            {
+                throw new ArgumentException("No SOCKS5 auth method has been set.");
+            }
 
             // The client and server then enter a method-specific sub-negotiation.
-            switch (selectedMethod)
+            switch (MethodAuth.Value)
             {
-                case SocksAuthMethod.NoAuthRequired:
-                    // Skip?
+                case SocksMethodAuth.NoAuthRequired:
                     break;
 
-                case SocksAuthMethod.GSSAPI:
+                case SocksMethodAuth.GSSAPI:
                     throw new NotSupportedException("GSSAPI is not implemented.");
 
-                case SocksAuthMethod.UsernamePassword:
+                case SocksMethodAuth.UsernamePassword:
                     break;
 
                 // If the selected METHOD is X'FF', none of the methods listed by the
                 // client are acceptable, and the client MUST close the connection
-                case SocksAuthMethod.NoAcceptableMethods:
-                    socket.Dispose();
-                    return null;
+                case SocksMethodAuth.NoAcceptableMethods:
+                    Socket.Dispose();
+                    return SocketProxyResult.MethodNotAcceptable;
 
                 default:
                     throw new ArgumentOutOfRangeException();
             }
 
+            return SocketProxyResult.Ok;
+        }
+
+        private async Task<SocketProxyResult> DoConnectAsync()
+        {
             // Once the method-dependent subnegotiation has completed,
             // the client sends the request details.
+            var dstIsHostname = Destination is DnsEndPoint;
 
-            int requestBufferLength;
-            byte[] requestBuffer;
+            var dstAddress = dstIsHostname
+                ? Encoding.ASCII.GetBytes(((DnsEndPoint) Destination).Host)
+                : ((IPEndPoint) Destination).Address.GetAddressBytes();
 
-            if (endpoint is IPEndPoint ipEndPoint)
+            var dstPort = dstIsHostname
+                ? ((DnsEndPoint) Destination).Port
+                : ((IPEndPoint) Destination).Port;
+
+            var requestBuffer = Destination is DnsEndPoint
+                ? new byte[7 + dstAddress.Length]
+                : new byte[6 + dstAddress.Length];
+
+            requestBuffer[0] = (byte) SocksVersion.Five;
+            requestBuffer[1] = (byte) SocksRequestCommand.Connect;
+            requestBuffer[3] = (byte) SocksRequestAddressType.IPv4;
+
+            if (dstIsHostname)
             {
-                var ipBytes = ipEndPoint.Address.GetAddressBytes();
-                if (ipBytes.Length == 4)
+                requestBuffer[4] = (byte) dstAddress.Length;
+
+                for (var i = 0; i < dstAddress.Length; i++)
                 {
-                    requestBufferLength = 10;
-                    requestBuffer = new byte[]
-                    {
-                        (byte) SocksVersion.Five,
-                        (byte) SocksRequestCommand.Connect,
-                        0x00, // Reserved
-                        (byte) SocksRequestAddressType.IPv4,
-                        ipBytes[0], ipBytes[1], ipBytes[2], ipBytes[3],
-                        (byte) (ipEndPoint.Port >> 8),
-                        (byte) ipEndPoint.Port,
-                    };
+                    requestBuffer[5 + i] = dstAddress[i];
                 }
-                else if (ipBytes.Length == 16)
-                {
-                    requestBufferLength = 22;
-                    requestBuffer = new byte[]
-                    {
-                        (byte) SocksVersion.Five,
-                        (byte) SocksRequestCommand.Connect,
-                        0x00, // Reserved
-                        (byte) SocksRequestAddressType.IPv6,
-                        ipBytes[0], ipBytes[1], ipBytes[2], ipBytes[3],
-                        ipBytes[4], ipBytes[5], ipBytes[6], ipBytes[7],
-                        ipBytes[8], ipBytes[9], ipBytes[10], ipBytes[11],
-                        ipBytes[12], ipBytes[13], ipBytes[14], ipBytes[15],
-                        (byte) (ipEndPoint.Port >> 8),
-                        (byte) ipEndPoint.Port,
-                    };
-                }
-                else
-                {
-                    throw new NotSupportedException($"Unsupported amount of ipBytes was found '{ipBytes.Length}'.");
-                }
-            }
-            else if (endpoint is DnsEndPoint dnsEndPoint)
-            {
-                var dnsBytes = Encoding.ASCII.GetBytes(dnsEndPoint.Host);
 
-                requestBufferLength = 7 + dnsBytes.Length;
-                requestBuffer = new byte[262]; // Max amount of bytes
-
-                requestBuffer[0] = (byte) SocksVersion.Five;
-                requestBuffer[1] = (byte) SocksRequestCommand.Connect;
-                requestBuffer[3] = (byte) SocksRequestAddressType.FQDN;
-                requestBuffer[4] = (byte) dnsBytes.Length;
-
-                Buffer.BlockCopy(dnsBytes, 0, requestBuffer, 5, dnsBytes.Length);
-
-                requestBuffer[5 + dnsBytes.Length] = (byte) (dnsEndPoint.Port >> 8);
-                requestBuffer[5 + dnsBytes.Length + 1] = (byte)dnsEndPoint.Port;
+                requestBuffer[5 + dstAddress.Length] = (byte) (dstPort >> 8);
+                requestBuffer[6 + dstAddress.Length] = (byte) dstPort;
             }
             else
             {
-                throw new NotSupportedException("Unsupported Endpoint implementation was given.");
+                for (var i = 0; i < dstAddress.Length; i++)
+                {
+                    requestBuffer[4 + i] = dstAddress[i];
+                }
+
+                requestBuffer[4 + dstAddress.Length] = (byte) (dstPort >> 8);
+                requestBuffer[5 + dstAddress.Length] = (byte) dstPort;
             }
 
-            await socket.SendAsync(new ArraySegment<byte>(requestBuffer, 0, requestBufferLength), SocketFlags.None);
+            await Socket.SendAsync(new ArraySegment<byte>(requestBuffer), SocketFlags.None);
 
             // The server evaluates the request, and returns a reply.
-            await socket.ReceiveAsync(new ArraySegment<byte>(buffer), SocketFlags.None);
+            var received = await Socket.ReceiveAsync(new ArraySegment<byte>(_buffer), SocketFlags.None);
+            if (received != (dstIsHostname ? 7 : 6) + dstAddress.Length)
+            {
+                return SocketProxyResult.ReplyInvalidLength;
+            }
 
-            return null;
+            Reply = (SocksReply) _buffer[1];
+
+            return Reply == SocksReply.Succeeded
+                ? SocketProxyResult.Ok
+                : SocketProxyResult.ReplyInvalid;
         }
     }
 }

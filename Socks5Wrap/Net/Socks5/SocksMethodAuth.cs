@@ -1,6 +1,6 @@
 ﻿namespace Socks5Wrap.Net.Socks5
 {
-    internal enum SocksAuthMethod
+    public enum SocksMethodAuth
     {
         NoAuthRequired = 0x00,
         GSSAPI = 0x01,
