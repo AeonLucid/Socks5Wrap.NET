@@ -3,9 +3,9 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
-using Socks5Wrap.Net.Socks5;
+using Socks5Wrap.Socks5;
 
-namespace Socks5Wrap.Net
+namespace Socks5Wrap
 {
     /// <summary>
     ///     This class is not reusable.

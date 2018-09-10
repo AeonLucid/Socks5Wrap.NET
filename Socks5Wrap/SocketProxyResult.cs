@@ -1,4 +1,4 @@
-﻿namespace Socks5Wrap.Net
+﻿namespace Socks5Wrap
 {
     public enum SocketProxyResult
     {

@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Net;
 using System.Threading.Tasks;
-using Socks5Wrap.Net;
 
 namespace Socks5Wrap.ConsoleTest
 {

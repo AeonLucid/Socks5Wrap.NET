@@ -1,4 +1,4 @@
-﻿namespace Socks5Wrap.Net.Socks5
+﻿namespace Socks5Wrap.Socks5
 {
     internal enum SocksVersion
     {

@@ -1,0 +1,39 @@
+version: '1.0.{build}'
+
+branches:
+  only:
+  - master
+
+assembly_info:
+  patch: false
+
+dotnet_csproj:
+  patch: true
+  file: '**\*.csproj'
+  version: '{version}'
+  package_version: '{version}'
+  assembly_version: '{version}'
+  file_version: '{version}'
+  informational_version: '{version}'
+
+configuration: Release
+
+environment:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+
+before_build:
+  - appveyor-retry dotnet restore -v Minimal
+  - appveyor-retry dotnet restore "Socks5Wrap" -v Minimal
+
+build_script:
+  - dotnet build "Socks5Wrap" -c Release
+  
+after_build:
+  - dotnet pack "Socks5Wrap" -c Release --no-build -o artifacts
+  
+artifacts:
+  - path: .\**\artifacts\*.nupkg
+  
+only_commits:
+  files:
+    - Socks5Wrap/**/*
