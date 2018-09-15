@@ -151,10 +151,10 @@ namespace Socks5Wrap
 
             requestBuffer[0] = (byte) SocksVersion.Five;
             requestBuffer[1] = (byte) SocksRequestCommand.Connect;
-            requestBuffer[3] = (byte) SocksRequestAddressType.IPv4;
 
             if (dstIsHostname)
             {
+                requestBuffer[3] = (byte) SocksRequestAddressType.FQDN;
                 requestBuffer[4] = (byte) dstAddress.Length;
 
                 for (var i = 0; i < dstAddress.Length; i++)
@@ -167,6 +167,10 @@ namespace Socks5Wrap
             }
             else
             {
+                requestBuffer[3] = dstAddress.Length == 16 
+                    ? (byte) SocksRequestAddressType.IPv4
+                    : (byte) SocksRequestAddressType.IPv6;
+
                 for (var i = 0; i < dstAddress.Length; i++)
                 {
                     requestBuffer[4 + i] = dstAddress[i];
@@ -180,7 +184,7 @@ namespace Socks5Wrap
 
             // The server evaluates the request, and returns a reply.
             var received = await Socket.ReceiveAsync(new ArraySegment<byte>(_buffer), SocketFlags.None);
-            if (received != (dstIsHostname ? 7 : 6) + dstAddress.Length)
+            if (received != 10 && received != 22)
             {
                 return SocketProxyResult.ReplyInvalidLength;
             }
