@@ -15,25 +15,19 @@ namespace Socks5Wrap
     {
         private readonly byte[] _buffer;
 
-        public SocketProxy(string ip, int port, EndPoint destination)
+        public SocketProxy(EndPoint proxyEndpoint, EndPoint destination)
         {
             _buffer = new byte[512];
 
-            Ip = ip;
-            Port = port;
+            ProxyEndpoint = proxyEndpoint;
             Destination = destination;
             Socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
         }
 
         /// <summary>
-        ///     The SOCKS5 server ip address.
+        ///     The SOCKS5 server.
         /// </summary>
-        public string Ip { get; }
-
-        /// <summary>
-        ///     The SOCKS5 server port.
-        /// </summary>
-        public int Port { get; }
+        public EndPoint ProxyEndpoint { get; }
 
         /// <summary>
         ///     The destination for the SOCKS5 proxy.
@@ -49,10 +43,20 @@ namespace Socks5Wrap
 
         public SocksReply? Reply { get; internal set; }
 
-        public async Task<(SocketProxyResult, Socket)> ConnectToAsync()
+        public async Task<(SocketProxyResult, Socket)> ConnectToAsync(TimeSpan connectTimeout)
         {
-            await Socket.ConnectAsync(Ip, Port);
+            // Connect to the proxy.
+            var result = Socket.BeginConnect(ProxyEndpoint, null, null);
+            var success = result.AsyncWaitHandle.WaitOne(connectTimeout);
+            if (!success)
+            {
+                Socket.Dispose();
+                return (SocketProxyResult.TimeoutConnect, null);
+            }
 
+            Socket.EndConnect(result);
+
+            // Exchange data with the proxy.
             var tasks = new Func<Task<SocketProxyResult>>[]
             {
                 DoMethodsAsync,
@@ -99,7 +103,7 @@ namespace Socks5Wrap
             return SocketProxyResult.Ok;
         }
 
-        private async Task<SocketProxyResult> DoAuthAsync()
+        private Task<SocketProxyResult> DoAuthAsync()
         {
             if (!MethodAuth.HasValue)
             {
@@ -116,19 +120,19 @@ namespace Socks5Wrap
                     throw new NotSupportedException("GSSAPI is not implemented.");
 
                 case SocksMethodAuth.UsernamePassword:
-                    break;
+                    throw new NotSupportedException("UsernamePassword is not implemented.");
 
                 // If the selected METHOD is X'FF', none of the methods listed by the
                 // client are acceptable, and the client MUST close the connection
                 case SocksMethodAuth.NoAcceptableMethods:
                     Socket.Dispose();
-                    return SocketProxyResult.MethodNotAcceptable;
+                    return Task.FromResult(SocketProxyResult.MethodNotAcceptable);
 
                 default:
                     throw new ArgumentOutOfRangeException();
             }
 
-            return SocketProxyResult.Ok;
+            return Task.FromResult(SocketProxyResult.Ok);
         }
 
         private async Task<SocketProxyResult> DoConnectAsync()
@@ -167,7 +171,7 @@ namespace Socks5Wrap
             }
             else
             {
-                requestBuffer[3] = dstAddress.Length == 16 
+                requestBuffer[3] = dstAddress.Length == 4 
                     ? (byte) SocksRequestAddressType.IPv4
                     : (byte) SocksRequestAddressType.IPv6;
 
@@ -183,17 +187,53 @@ namespace Socks5Wrap
             await Socket.SendAsync(new ArraySegment<byte>(requestBuffer), SocketFlags.None);
 
             // The server evaluates the request, and returns a reply.
-            var received = await Socket.ReceiveAsync(new ArraySegment<byte>(_buffer), SocketFlags.None);
-            if (received != 10 && received != 22)
+            // - First we read VER, REP, RSV & ATYP
+            var received = await Socket.ReceiveAsync(new ArraySegment<byte>(_buffer, 0, 4), SocketFlags.None);
+            if (received != 4)
             {
                 return SocketProxyResult.ReplyInvalidLength;
             }
 
-            Reply = (SocksReply) _buffer[1];
+            // - Now we check if the reply was positive.
+            Reply = (SocksReply)_buffer[1];
 
-            return Reply == SocksReply.Succeeded
-                ? SocketProxyResult.Ok
-                : SocketProxyResult.ReplyInvalid;
+            if (Reply != SocksReply.Succeeded)
+            {
+                return SocketProxyResult.ReplyInvalid;
+            }
+
+            // - Consume rest of the SOCKS5 protocol so the next read will give application data.
+            var atyp = (SocksRequestAddressType) _buffer[3];
+            int atypSize;
+            int read;
+
+            switch (atyp)
+            {
+                case SocksRequestAddressType.IPv4:
+                    atypSize = 6;
+                    read = await Socket.ReceiveAsync(new ArraySegment<byte>(_buffer, 0, atypSize), SocketFlags.None);
+                    break;
+                case SocksRequestAddressType.IPv6:
+                    atypSize = 18;
+                    read = await Socket.ReceiveAsync(new ArraySegment<byte>(_buffer, 0, atypSize), SocketFlags.None);
+                    break;
+                case SocksRequestAddressType.FQDN:
+                    atypSize = 1;
+                    await Socket.ReceiveAsync(new ArraySegment<byte>(_buffer, 0, atypSize), SocketFlags.None);
+
+                    atypSize = _buffer[0] + 2;
+                    read = await Socket.ReceiveAsync(new ArraySegment<byte>(_buffer, 0, atypSize), SocketFlags.None);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException();
+            }
+
+            if (read != atypSize)
+            {
+                return SocketProxyResult.ReplyInvalid;
+            }
+
+            return SocketProxyResult.Ok;
         }
     }
 }

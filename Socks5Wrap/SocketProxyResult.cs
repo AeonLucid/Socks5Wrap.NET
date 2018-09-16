@@ -3,6 +3,7 @@
     public enum SocketProxyResult
     {
         Ok,
+        TimeoutConnect,
         MethodInvalidLength,
         MethodNotAcceptable,
         ReplyInvalidLength,
