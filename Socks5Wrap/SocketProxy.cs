@@ -191,6 +191,11 @@ namespace Socks5Wrap
             var received = await Socket.ReceiveAsync(new ArraySegment<byte>(_buffer, 0, 4), SocketFlags.None);
             if (received != 4)
             {
+                if (received >= 2)
+                {
+                    Reply = (SocksReply)_buffer[1];
+                }
+
                 return SocketProxyResult.ReplyInvalidLength;
             }
 
