@@ -11,6 +11,8 @@
     <RepositoryUrl>https://github.com/AeonLucid/Socks5Wrap.NET</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>SOCKS5</PackageTags>
+    <PackageLicenseUrl>https://github.com/AeonLucid/Socks5Wrap.NET/blob/master/LICENSE</PackageLicenseUrl>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
   </PropertyGroup>
 
 </Project>
