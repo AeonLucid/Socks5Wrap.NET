@@ -14,10 +14,13 @@ namespace Socks5Wrap.ConsoleTest
             var destIp = Environment.GetEnvironmentVariable("DEST_IP");
             var destPort = Environment.GetEnvironmentVariable("DEST_PORT");
 
-            var socketProxy = new SocketProxy(proxyIp, int.Parse(proxyPort), new IPEndPoint(IPAddress.Parse(destIp), int.Parse(destPort)));
-            var socket = await socketProxy.ConnectToAsync();
+            var socketProxy = new SocketProxy(
+                new IPEndPoint(IPAddress.Parse(proxyIp), int.Parse(proxyPort)), 
+                new IPEndPoint(IPAddress.Parse(destIp), int.Parse(destPort)));
+            
+            var socket = await socketProxy.ConnectToAsync(TimeSpan.FromMinutes(1));
 
-            Console.WriteLine("Hello World!");
+            Console.WriteLine("Result " + socket.Item1);
         }
     }
 }

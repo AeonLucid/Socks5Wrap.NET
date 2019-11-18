@@ -129,6 +129,7 @@ namespace Socks5Wrap
                     return Task.FromResult(SocketProxyResult.MethodNotAcceptable);
 
                 default:
+                    Socket.Dispose();
                     throw new ArgumentOutOfRangeException();
             }
 
